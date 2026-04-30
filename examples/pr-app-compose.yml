@@ -1,0 +1,34 @@
+# Example: spin up a PR preview container.
+#
+# Used by the GitHub Actions workflow in this repo. Required env vars:
+#   PR              PR number
+#   PROJECT         repo / project name (becomes part of subdomain)
+#   IMAGE           full image ref (e.g. ghcr.io/myorg/myapp:pr-1234)
+#   PREVIEW_DOMAIN  base domain (e.g. preview.example.com)
+#   APP_PORT        port the app listens on inside the container (default 3000)
+#
+# Manual usage:
+#   PR=1234 PROJECT=myapp IMAGE=ghcr.io/myorg/myapp:pr-1234 \
+#     PREVIEW_DOMAIN=preview.example.com APP_PORT=3000 \
+#     docker compose -f pr-app-compose.yml -p "pr-myapp-1234" up -d
+
+services:
+  app:
+    image: ${IMAGE}
+    restart: unless-stopped
+    networks: [preview]
+    environment:
+      - PORT=${APP_PORT:-3000}
+      # add app-specific env or use env_file: here
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=preview
+      - traefik.http.routers.pr-${PROJECT}-${PR}.rule=Host(`pr-${PR}.${PROJECT}.${PREVIEW_DOMAIN}`)
+      - traefik.http.routers.pr-${PROJECT}-${PR}.entrypoints=websecure
+      - traefik.http.routers.pr-${PROJECT}-${PR}.tls=true
+      - traefik.http.services.pr-${PROJECT}-${PR}.loadbalancer.server.port=${APP_PORT:-3000}
+
+networks:
+  preview:
+    external: true
+    name: preview

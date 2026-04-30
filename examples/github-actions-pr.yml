@@ -1,0 +1,106 @@
+# Copy to <your-app-repo>/.github/workflows/preview.yml
+#
+# Required GitHub secrets:
+#   PREVIEW_HOST       SSH host of the preview server
+#   PREVIEW_USER       SSH user
+#   PREVIEW_SSH_KEY    private key contents
+#   PREVIEW_DOMAIN     base domain (e.g. preview.example.com)
+#
+# Required GitHub variable (or hardcode below):
+#   APP_PORT           port the container exposes (default 3000)
+
+name: PR Preview
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+concurrency:
+  group: preview-${{ github.event.repository.name }}-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}:pr-${{ github.event.pull_request.number }}
+  PROJECT: ${{ github.event.repository.name }}
+  PR: ${{ github.event.pull_request.number }}
+
+jobs:
+  deploy:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ env.IMAGE }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Deploy on preview host
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.PREVIEW_HOST }}
+          username: ${{ secrets.PREVIEW_USER }}
+          key: ${{ secrets.PREVIEW_SSH_KEY }}
+          envs: IMAGE,PROJECT,PR
+          script: |
+            cd /srv/preview-platform
+            export PR="${PR}"
+            export PROJECT="${PROJECT}"
+            export IMAGE="${IMAGE}"
+            export PREVIEW_DOMAIN="${{ secrets.PREVIEW_DOMAIN }}"
+            export APP_PORT="${{ vars.APP_PORT || '3000' }}"
+            docker compose -f examples/pr-app-compose.yml \
+              -p "pr-${PROJECT}-${PR}" pull
+            docker compose -f examples/pr-app-compose.yml \
+              -p "pr-${PROJECT}-${PR}" up -d --force-recreate
+
+      - name: Comment preview URL
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: preview
+          message: |
+            🔍 **Preview ready**
+
+            👉 https://pr-${{ env.PR }}.${{ env.PROJECT }}.${{ secrets.PREVIEW_DOMAIN }}
+
+            _Updates automatically on every push. Tears down when this PR is closed._
+
+  teardown:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Tear down on preview host
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.PREVIEW_HOST }}
+          username: ${{ secrets.PREVIEW_USER }}
+          key: ${{ secrets.PREVIEW_SSH_KEY }}
+          envs: PROJECT,PR
+          script: |
+            docker compose -f /srv/preview-platform/examples/pr-app-compose.yml \
+              -p "pr-${PROJECT}-${PR}" down -v --remove-orphans || true
+
+      - name: Update PR comment
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: preview
+          message: |
+            🧹 Preview environment removed.

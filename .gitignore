@@ -1,0 +1,12 @@
+.env
+letsencrypt/acme.json
+letsencrypt/*.json
+dynamic/*.yml
+!dynamic/.gitkeep
+.preview.env
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
