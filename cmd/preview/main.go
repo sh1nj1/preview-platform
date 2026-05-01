@@ -148,16 +148,19 @@ func envInt(k string, dflt int) int {
 	return dflt
 }
 
+// freePort returns a port that is unused on every local interface, since the
+// dev server the user starts will typically bind 0.0.0.0 — checking only the
+// loopback would miss collisions on a LAN/Tailscale interface.
 func freePort() (int, error) {
 	start, end := envInt("PREVIEW_PORT_START", 3001), envInt("PREVIEW_PORT_END", 3099)
 	for p := start; p <= end; p++ {
-		l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", p))
+		l, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", p))
 		if err == nil {
 			l.Close()
 			return p, nil
 		}
 	}
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	l, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
 		return 0, fmt.Errorf("no free port: %w", err)
 	}

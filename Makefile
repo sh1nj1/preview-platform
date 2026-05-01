@@ -1,6 +1,6 @@
 # Local development. For production, build the API via Dockerfile.api.
 
-.PHONY: build sync-embed cli api docker clean
+.PHONY: build sync-embed cli api docker test clean
 
 BIN_DIR := bin
 
@@ -18,6 +18,10 @@ api: sync-embed
 	go build -o $(BIN_DIR)/preview-api ./cmd/api
 
 build: cli api
+
+test: sync-embed
+	go vet ./...
+	go test ./...
 
 docker:
 	docker build -f Dockerfile.api -t preview-api:local .

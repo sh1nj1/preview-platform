@@ -100,6 +100,14 @@ func (s *server) routeFile(project, slug string) string {
 	return filepath.Join(s.cfg.DynamicDir, fmt.Sprintf("wt-%s__%s.yml", project, slug))
 }
 
+// legacyRouteFile is the filename written by the previous bash CLI
+// (wt-<project>-<slug>.yml). We never write this format, but read/delete
+// honor it for upgrade compatibility with deployments that have files
+// left over from the bash workflow.
+func (s *server) legacyRouteFile(project, slug string) string {
+	return filepath.Join(s.cfg.DynamicDir, fmt.Sprintf("wt-%s-%s.yml", project, slug))
+}
+
 func (s *server) hostFor(project, slug string) string {
 	return fmt.Sprintf("%s.%s.%s", slug, project, s.cfg.Domain)
 }
@@ -146,6 +154,11 @@ func (s *server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
+	// Drop any legacy-format file with the same project/slug so Traefik
+	// doesn't load conflicting route definitions during a partial upgrade.
+	if err := os.Remove(s.legacyRouteFile(req.Project, req.Slug)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		log.Printf("warn: removing legacy route file: %v", err)
+	}
 	writeJSON(w, 200, linkResp{
 		URL:      s.urlFor(req.Project, req.Slug),
 		Project:  req.Project,
@@ -159,13 +172,23 @@ func (s *server) handleDelete(w http.ResponseWriter, project, slug string) {
 		http.Error(w, "invalid project or slug", 400)
 		return
 	}
-	path := s.routeFile(project, slug)
-	if err := os.Remove(path); err != nil {
+	// Try both the new and legacy filenames so previews registered by
+	// the old bash CLI are also deletable through this endpoint.
+	removed := false
+	for _, path := range []string{s.routeFile(project, slug), s.legacyRouteFile(project, slug)} {
+		err := os.Remove(path)
+		if err == nil {
+			removed = true
+			continue
+		}
 		if errors.Is(err, fs.ErrNotExist) {
-			http.Error(w, "not found", 404)
-			return
+			continue
 		}
 		http.Error(w, err.Error(), 500)
+		return
+	}
+	if !removed {
+		http.Error(w, "not found", 404)
 		return
 	}
 	w.WriteHeader(204)
@@ -185,21 +208,16 @@ func (s *server) listAll(filterProject string) ([]linkResp, error) {
 		return nil, err
 	}
 	var out []linkResp
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
+	seen := map[string]bool{}
+	add := func(project, slug, name string) {
+		key := project + "/" + slug
+		if seen[key] {
+			return
 		}
-		m := routeFileRe.FindStringSubmatch(e.Name())
-		if m == nil {
-			continue
-		}
-		project, slug := m[1], m[2]
-		if filterProject != "" && project != filterProject {
-			continue
-		}
-		body, err := os.ReadFile(filepath.Join(s.cfg.DynamicDir, e.Name()))
+		seen[key] = true
+		body, err := os.ReadFile(filepath.Join(s.cfg.DynamicDir, name))
 		if err != nil {
-			continue
+			return
 		}
 		upstream := ""
 		if m := urlLineRe.FindStringSubmatch(string(body)); m != nil {
@@ -211,6 +229,33 @@ func (s *server) listAll(filterProject string) ([]linkResp, error) {
 			Slug:     slug,
 			Upstream: upstream,
 		})
+	}
+
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		// New format (unambiguous).
+		if m := routeFileRe.FindStringSubmatch(e.Name()); m != nil {
+			project, slug := m[1], m[2]
+			if filterProject != "" && project != filterProject {
+				continue
+			}
+			add(project, slug, e.Name())
+			continue
+		}
+		// Legacy format (wt-<project>-<slug>.yml). The split is ambiguous
+		// when project names contain hyphens, so we only honor it when the
+		// caller filtered by a specific project — then the prefix is exact.
+		if filterProject != "" {
+			prefix := "wt-" + filterProject + "-"
+			if strings.HasPrefix(e.Name(), prefix) && strings.HasSuffix(e.Name(), ".yml") {
+				slug := strings.TrimSuffix(strings.TrimPrefix(e.Name(), prefix), ".yml")
+				if validSlug(slug) {
+					add(filterProject, slug, e.Name())
+				}
+			}
+		}
 	}
 	return out, nil
 }
@@ -234,6 +279,9 @@ func (s *server) handleGet(w http.ResponseWriter, project, slug string) {
 		return
 	}
 	body, err := os.ReadFile(s.routeFile(project, slug))
+	if errors.Is(err, fs.ErrNotExist) {
+		body, err = os.ReadFile(s.legacyRouteFile(project, slug))
+	}
 	if err != nil {
 		http.Error(w, "not found", 404)
 		return
