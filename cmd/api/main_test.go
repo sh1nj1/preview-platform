@@ -489,6 +489,27 @@ func TestTraefikObjectNamesUnambiguous(t *testing.T) {
 	}
 }
 
+// TestListPropagatesReadError ensures the list path doesn't silently drop
+// a route whose YAML file can't be read — operators must see the failure
+// (HTTP 500) instead of an incomplete-but-200 response.
+func TestListPropagatesReadError(t *testing.T) {
+	s, dir := newTestServer(t)
+	// Dangling symlink: ReadDir surfaces it as a non-directory entry, but
+	// ReadFile follows the link and fails. Avoids needing chmod tricks
+	// that don't work when the test runs as root.
+	bad := filepath.Join(dir, "wt-x__y.yml")
+	if err := os.Symlink(filepath.Join(dir, "does-not-exist"), bad); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+	w := do(s, "GET", "/v1/previews", "secret", nil)
+	if w.Code != 500 {
+		t.Fatalf("want 500, got %d (body=%s)", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "wt-x__y.yml") {
+		t.Errorf("error body missing filename for diagnostics: %s", w.Body.String())
+	}
+}
+
 // TestSkillFilesInSync guards against drift between the canonical
 // skills/preview/SKILL.md (what users browse) and cmd/api/skill/SKILL.md
 // (what the API embeds). The Makefile copies the former to the latter;

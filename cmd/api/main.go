@@ -285,7 +285,11 @@ func (s *server) listAll(filterProject string) ([]linkResp, error) {
 	}
 	var out []linkResp
 	seen := map[string]bool{}
+	var firstErr error
 	add := func(project, slug, name string, legacy bool) {
+		if firstErr != nil {
+			return
+		}
 		key := project + "/" + slug
 		if seen[key] {
 			return
@@ -293,6 +297,11 @@ func (s *server) listAll(filterProject string) ([]linkResp, error) {
 		seen[key] = true
 		body, err := os.ReadFile(filepath.Join(s.cfg.DynamicDir, name))
 		if err != nil {
+			// Surface read errors instead of silently dropping the route.
+			// An unreadable file usually means permission/filesystem trouble
+			// that operators need to know about — hiding it would make the
+			// list incomplete while still returning HTTP 200.
+			firstErr = fmt.Errorf("read %s: %w", name, err)
 			return
 		}
 		upstream := ""
@@ -360,6 +369,9 @@ func (s *server) listAll(filterProject string) ([]linkResp, error) {
 				add(project, slug, e.Name(), true)
 			}
 		}
+	}
+	if firstErr != nil {
+		return nil, firstErr
 	}
 	return out, nil
 }

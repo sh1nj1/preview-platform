@@ -299,7 +299,13 @@ func cmdLink(args []string) error {
 	}
 
 	if localPort > 0 {
-		os.WriteFile(".preview.env", []byte(fmt.Sprintf("PORT=%d\n", localPort)), 0644)
+		// The route is already registered server-side, so a write failure
+		// here would leave the user with a successful link but no
+		// .preview.env to source. Surface the error and tell them to
+		// roll back the registration manually.
+		if err := os.WriteFile(".preview.env", []byte(fmt.Sprintf("PORT=%d\n", localPort)), 0644); err != nil {
+			return fmt.Errorf("link registered (%s) but writing .preview.env failed: %w\n  run `preview unlink` to roll back", lr.URL, err)
+		}
 	}
 
 	fmt.Println(lr.URL)
