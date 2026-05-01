@@ -5,6 +5,10 @@ dynamic/*.yml
 !dynamic/.gitkeep
 .preview.env
 
+# Build outputs
+bin/
+cmd/api/dist/preview-*
+
 # OS / editor
 .DS_Store
 *.swp
