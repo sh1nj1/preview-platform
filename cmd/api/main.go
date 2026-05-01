@@ -214,7 +214,12 @@ func (s *server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Upstream = clean
-	name := fmt.Sprintf("wt-%s-%s", req.Project, req.Slug)
+	// Use the same "__" separator as the filename — slugs are validated to
+	// [a-z0-9-]+ so this is unambiguous across distinct (project, slug)
+	// pairs. A single hyphen here would collide for inputs like
+	// ("foo-bar","baz") vs ("foo","bar-baz") and Traefik would see
+	// duplicate router/service keys.
+	name := fmt.Sprintf("wt-%s__%s", req.Project, req.Slug)
 	yaml := fmt.Sprintf(routeYAMLTmpl, name, s.hostFor(req.Project, req.Slug), req.Upstream)
 	if err := os.MkdirAll(s.cfg.DynamicDir, 0755); err != nil {
 		http.Error(w, err.Error(), 500)

@@ -446,6 +446,49 @@ func TestMethodNotAllowed(t *testing.T) {
 	}
 }
 
+// TestTraefikObjectNamesUnambiguous covers the collision Codex flagged:
+// distinct (project, slug) pairs that produce different files must also
+// produce different router/service keys inside the YAML, otherwise Traefik
+// sees duplicate object names and silently drops one route.
+func TestTraefikObjectNamesUnambiguous(t *testing.T) {
+	s, dir := newTestServer(t)
+	pairs := []struct {
+		project, slug string
+	}{
+		{"foo-bar", "baz"},
+		{"foo", "bar-baz"},
+	}
+	var names []string
+	for _, p := range pairs {
+		w := do(s, "POST", "/v1/previews", "secret", linkReq{
+			Project: p.project, Slug: p.slug, Upstream: "http://1.2.3.4:80",
+		})
+		if w.Code != 200 {
+			t.Fatalf("create %s/%s: %d %s", p.project, p.slug, w.Code, w.Body.String())
+		}
+		path := filepath.Join(dir, "wt-"+p.project+"__"+p.slug+".yml")
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		// Pull the router/service key out of the YAML — first match of
+		// the pattern "wt-...:" inside the routers/services block.
+		for _, line := range strings.Split(string(body), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "wt-") && strings.HasSuffix(line, ":") {
+				names = append(names, strings.TrimSuffix(line, ":"))
+				break
+			}
+		}
+	}
+	if len(names) != 2 {
+		t.Fatalf("expected 2 names, got %v", names)
+	}
+	if names[0] == names[1] {
+		t.Fatalf("Traefik object names collide for distinct (project, slug) pairs: %s", names[0])
+	}
+}
+
 // TestSkillFilesInSync guards against drift between the canonical
 // skills/preview/SKILL.md (what users browse) and cmd/api/skill/SKILL.md
 // (what the API embeds). The Makefile copies the former to the latter;
