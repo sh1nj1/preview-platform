@@ -1,0 +1,27 @@
+# Build the preview CLI for all supported (os,arch) pairs, embed them into the
+# API binary via go:embed, then ship in a minimal runtime image.
+FROM golang:1.22-alpine AS build
+WORKDIR /src
+COPY go.mod ./
+COPY cmd ./cmd
+COPY skills ./skills
+RUN set -eux; \
+    mkdir -p cmd/api/dist cmd/api/skill; \
+    cp skills/preview/SKILL.md cmd/api/skill/SKILL.md; \
+    for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do \
+      os="${target%/*}"; arch="${target#*/}"; \
+      CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
+        go build -ldflags="-s -w" \
+        -o "cmd/api/dist/preview-${os}-${arch}" \
+        ./cmd/preview; \
+    done; \
+    CGO_ENABLED=0 go build -ldflags="-s -w" -o /api ./cmd/api
+
+FROM gcr.io/distroless/static-debian12
+COPY --from=build /api /api
+EXPOSE 8080
+# Runs as root so it can write to the bind-mounted /dynamic without ownership
+# gymnastics. The image is distroless (no shell, no package manager) so blast
+# radius is limited; the only thing this process does on disk is write YAML
+# files into DYNAMIC_DIR.
+ENTRYPOINT ["/api"]
