@@ -307,13 +307,23 @@ func (s *server) listAll(filterProject string) ([]linkResp, error) {
 		if e.IsDir() {
 			continue
 		}
-		// New format (unambiguous).
+		// First pass: new format (unambiguous and canonical).
 		if m := routeFileRe.FindStringSubmatch(e.Name()); m != nil {
 			project, slug := m[1], m[2]
 			if filterProject != "" && project != filterProject {
 				continue
 			}
 			add(project, slug, e.Name(), false)
+		}
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		// Second pass: legacy format. Skipped for any project/slug already
+		// covered by the new format above so the canonical file always wins
+		// in mixed upgrade states (matches handleGet's preference).
+		if routeFileRe.MatchString(e.Name()) {
 			continue
 		}
 		// Legacy format (wt-<project>-<slug>.yml). The split is ambiguous

@@ -345,6 +345,49 @@ func TestLegacyFilenameCompat(t *testing.T) {
 	})
 }
 
+// TestListPrefersCanonicalOverLegacy ensures that when both filename
+// formats coexist for the same project/slug, the new format wins in list
+// output — matching handleGet's preference. ReadDir is filename-sorted so
+// the legacy "-" file is visited before the new "__" file; a naive
+// first-seen dedupe would surface stale legacy data.
+func TestListPrefersCanonicalOverLegacy(t *testing.T) {
+	s, dir := newTestServer(t)
+	// Legacy entry first (older upstream).
+	os.WriteFile(filepath.Join(dir, "wt-myproj-myslug.yml"),
+		[]byte("services:\n    x:\n      loadBalancer:\n        servers:\n          - url: \"http://stale:1\"\n"), 0644)
+	// Canonical/new entry (current upstream) created via API.
+	w := do(s, "POST", "/v1/previews", "secret", linkReq{
+		Project: "myproj", Slug: "myslug", Upstream: "http://current:2",
+	})
+	if w.Code != 200 {
+		t.Fatalf("create: %d", w.Code)
+	}
+	// API's create cleans up the legacy file with same project/slug, but
+	// to test list precedence in isolation, reinstate the legacy file.
+	os.WriteFile(filepath.Join(dir, "wt-myproj-myslug.yml"),
+		[]byte("services:\n    x:\n      loadBalancer:\n        servers:\n          - url: \"http://stale:1\"\n"), 0644)
+
+	w = do(s, "GET", "/v1/previews?project=myproj", "secret", nil)
+	var items []linkResp
+	json.NewDecoder(w.Body).Decode(&items)
+	if len(items) != 1 {
+		t.Fatalf("want 1 deduped item, got %+v", items)
+	}
+	if items[0].Upstream != "http://current:2" {
+		t.Errorf("want canonical upstream, got %q (legacy=%v)", items[0].Upstream, items[0].Legacy)
+	}
+	if items[0].Legacy {
+		t.Errorf("expected Legacy=false for canonical winner")
+	}
+
+	// Same expectation in unfiltered list.
+	w = do(s, "GET", "/v1/previews", "secret", nil)
+	json.NewDecoder(w.Body).Decode(&items)
+	if len(items) != 1 || items[0].Upstream != "http://current:2" || items[0].Legacy {
+		t.Fatalf("unfiltered list did not prefer canonical: %+v", items)
+	}
+}
+
 func TestRoutesYAMLContent(t *testing.T) {
 	s, dir := newTestServer(t)
 	do(s, "POST", "/v1/previews", "secret", linkReq{
