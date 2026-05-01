@@ -63,6 +63,38 @@ func TestFreePortAvoidsTakenPort(t *testing.T) {
 	}
 }
 
+// TestFirstNonLoopbackIPv4 verifies the IP detector works without the
+// previous Internet probe. We don't assert a specific value (CI hosts vary)
+// but it should never return a loopback or link-local address — and on any
+// reasonable test host with at least one configured interface, it should
+// return something non-empty.
+func TestFirstNonLoopbackIPv4(t *testing.T) {
+	got := firstNonLoopbackIPv4()
+	if got == "" {
+		t.Skip("no non-loopback IPv4 interface available in this environment")
+	}
+	ip := net.ParseIP(got)
+	if ip == nil {
+		t.Fatalf("not a valid IP: %q", got)
+	}
+	if ip.IsLoopback() {
+		t.Fatalf("returned loopback address: %s", got)
+	}
+	if ip.IsLinkLocalUnicast() {
+		t.Fatalf("returned link-local address: %s", got)
+	}
+	if ip.To4() == nil {
+		t.Fatalf("not IPv4: %s", got)
+	}
+}
+
+func TestDetectIPRespectsOverride(t *testing.T) {
+	t.Setenv("PREVIEW_HOST_IP", "10.99.88.77")
+	if got := detectIP(); got != "10.99.88.77" {
+		t.Fatalf("override ignored: got %q", got)
+	}
+}
+
 func TestEnvInt(t *testing.T) {
 	t.Setenv("FOO_NUM", "42")
 	if got := envInt("FOO_NUM", 0); got != 42 {

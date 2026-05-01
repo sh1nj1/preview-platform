@@ -22,10 +22,13 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"text/template"
 )
@@ -77,6 +80,66 @@ func envOr(k, dflt string) string {
 var slugRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$`)
 
 func validSlug(s string) bool { return len(s) <= 63 && slugRe.MatchString(s) }
+
+// sanitizeUpstream parses the requested upstream URL and rebuilds it from
+// trusted components, defending against YAML injection (newlines, embedded
+// quotes) by anyone with a valid API token. We only allow scheme://host[:port]
+// — no path, query, fragment, or userinfo, since the Traefik file provider
+// expects a base URL for the load balancer.
+func sanitizeUpstream(raw string) (string, error) {
+	if raw == "" {
+		return "", errors.New("empty")
+	}
+	if strings.ContainsAny(raw, "\n\r\t\"\\") {
+		return "", errors.New("contains forbidden characters")
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", errors.New("scheme must be http or https")
+	}
+	if u.User != nil {
+		return "", errors.New("userinfo not allowed")
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return "", errors.New("query or fragment not allowed")
+	}
+	if u.Path != "" && u.Path != "/" {
+		return "", errors.New("path not allowed")
+	}
+	host := u.Hostname()
+	if host == "" {
+		return "", errors.New("missing host")
+	}
+	if ip := net.ParseIP(host); ip == nil {
+		// Hostname must be a DNS label (no embedded special chars).
+		for _, r := range host {
+			ok := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+				(r >= '0' && r <= '9') || r == '.' || r == '-'
+			if !ok {
+				return "", errors.New("invalid host character")
+			}
+		}
+	}
+	port := u.Port()
+	if port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return "", errors.New("invalid port")
+		}
+	}
+	hostPart := host
+	if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
+		hostPart = "[" + host + "]"
+	}
+	out := u.Scheme + "://" + hostPart
+	if port != "" {
+		out += ":" + port
+	}
+	return out, nil
+}
 
 type linkReq struct {
 	Project  string `json:"project"`
@@ -140,10 +203,12 @@ func (s *server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid project or slug (lowercase alphanumeric + hyphen)", 400)
 		return
 	}
-	if !strings.HasPrefix(req.Upstream, "http://") && !strings.HasPrefix(req.Upstream, "https://") {
-		http.Error(w, "upstream must start with http:// or https://", 400)
+	clean, err := sanitizeUpstream(req.Upstream)
+	if err != nil {
+		http.Error(w, "invalid upstream: "+err.Error(), 400)
 		return
 	}
+	req.Upstream = clean
 	name := fmt.Sprintf("wt-%s-%s", req.Project, req.Slug)
 	yaml := fmt.Sprintf(routeYAMLTmpl, name, s.hostFor(req.Project, req.Slug), req.Upstream)
 	if err := os.MkdirAll(s.cfg.DynamicDir, 0755); err != nil {

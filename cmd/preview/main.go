@@ -132,9 +132,37 @@ func detectIP() string {
 			}
 		}
 	}
-	if conn, err := net.Dial("udp4", "8.8.8.8:80"); err == nil {
-		defer conn.Close()
-		return conn.LocalAddr().(*net.UDPAddr).IP.String()
+	return firstNonLoopbackIPv4()
+}
+
+// firstNonLoopbackIPv4 enumerates local interfaces and returns the first
+// non-loopback, non-link-local IPv4 address belonging to an "up" interface.
+// Avoids any external network probe so it works on LAN-only or
+// egress-restricted hosts.
+func firstNonLoopbackIPv4() string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ipnet, ok := addr.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ip := ipnet.IP.To4()
+			if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+				continue
+			}
+			return ip.String()
+		}
 	}
 	return ""
 }

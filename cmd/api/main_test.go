@@ -142,14 +142,85 @@ func TestCreateValidation(t *testing.T) {
 		{"bad project", linkReq{Project: "Bad_Project", Slug: "ok", Upstream: "http://x:1"}},
 		{"bad slug", linkReq{Project: "ok", Slug: "Bad", Upstream: "http://x:1"}},
 		{"non-http upstream", linkReq{Project: "ok", Slug: "ok", Upstream: "tcp://x:1"}},
+		{"upstream with newline", linkReq{Project: "ok", Slug: "ok", Upstream: "http://1.2.3.4:80\nrouters: {}"}},
+		{"upstream with quote", linkReq{Project: "ok", Slug: "ok", Upstream: "http://1.2.3.4\":80"}},
+		{"upstream with userinfo", linkReq{Project: "ok", Slug: "ok", Upstream: "http://user:pass@1.2.3.4:80"}},
+		{"upstream with path", linkReq{Project: "ok", Slug: "ok", Upstream: "http://1.2.3.4:80/api"}},
+		{"upstream with query", linkReq{Project: "ok", Slug: "ok", Upstream: "http://1.2.3.4:80?q=1"}},
+		{"upstream missing host", linkReq{Project: "ok", Slug: "ok", Upstream: "http:///"}},
+		{"upstream invalid port", linkReq{Project: "ok", Slug: "ok", Upstream: "http://1.2.3.4:abc"}},
+		{"upstream port out of range", linkReq{Project: "ok", Slug: "ok", Upstream: "http://1.2.3.4:99999"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			w := do(s, "POST", "/v1/previews", "secret", tc.body)
 			if w.Code != 400 {
-				t.Fatalf("got %d, want 400", w.Code)
+				t.Fatalf("got %d, want 400 (body=%s)", w.Code, w.Body.String())
 			}
 		})
+	}
+}
+
+func TestSanitizeUpstream(t *testing.T) {
+	cases := []struct {
+		in, want string
+		wantErr  bool
+	}{
+		{"http://1.2.3.4:3001", "http://1.2.3.4:3001", false},
+		{"https://example.com", "https://example.com", false},
+		{"http://example.com:8080", "http://example.com:8080", false},
+		{"http://1.2.3.4:3001/", "http://1.2.3.4:3001", false},
+		{"http://[::1]:3001", "http://[::1]:3001", false},
+		// invalid:
+		{"", "", true},
+		{"ftp://x:1", "", true},
+		{"http://x:1\n", "", true},
+		{"http://x\":1", "", true},
+		{"http://x:1\\", "", true},
+		{"http://x:1/path", "", true},
+		{"http://x:1?q=1", "", true},
+		{"http://x:1#frag", "", true},
+		{"http://user@x:1", "", true},
+		{"http://x:abc", "", true},
+		{"http://x:0", "", true},
+		{"http://x:99999", "", true},
+		{"http:///", "", true},
+		{"http://bad host:1", "", true},
+	}
+	for _, tc := range cases {
+		got, err := sanitizeUpstream(tc.in)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("sanitizeUpstream(%q) = %q, want error", tc.in, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("sanitizeUpstream(%q) error: %v", tc.in, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("sanitizeUpstream(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestCreateRejectsYAMLInjection covers the regression Codex flagged: a
+// caller with a valid token must not be able to inject YAML by smuggling
+// newlines or quotes through the upstream field.
+func TestCreateRejectsYAMLInjection(t *testing.T) {
+	s, dir := newTestServer(t)
+	w := do(s, "POST", "/v1/previews", "secret", linkReq{
+		Project: "myrepo", Slug: "x",
+		Upstream: "http://1.2.3.4:80\n          - url: \"http://attacker.example.com\"",
+	})
+	if w.Code != 400 {
+		t.Fatalf("expected reject, got %d", w.Code)
+	}
+	// Verify no file was written.
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 0 {
+		t.Fatalf("file written despite injection attempt: %v", entries)
 	}
 }
 
