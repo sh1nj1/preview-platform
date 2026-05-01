@@ -2,6 +2,7 @@ package main
 
 import (
 	"net"
+	"os"
 	"strconv"
 	"testing"
 )
@@ -92,6 +93,48 @@ func TestDetectIPRespectsOverride(t *testing.T) {
 	t.Setenv("PREVIEW_HOST_IP", "10.99.88.77")
 	if got := detectIP(); got != "10.99.88.77" {
 		t.Fatalf("override ignored: got %q", got)
+	}
+}
+
+// TestDefaultRouteInterfaceLinux is best-effort: on Linux test hosts with a
+// default route, the function should return a non-empty interface name and
+// that interface should resolve to a non-loopback IPv4. Skipped otherwise.
+func TestDefaultRouteInterfaceLinux(t *testing.T) {
+	if _, err := os.Stat("/proc/net/route"); err != nil {
+		t.Skip("no /proc/net/route on this platform")
+	}
+	iface := defaultRouteInterface()
+	if iface == "" {
+		t.Skip("no default route configured on this host")
+	}
+	ip := ipv4OfInterface(iface)
+	if ip == "" {
+		t.Fatalf("default-route iface %q has no usable IPv4", iface)
+	}
+	parsed := net.ParseIP(ip)
+	if parsed == nil || parsed.IsLoopback() || parsed.IsLinkLocalUnicast() {
+		t.Fatalf("ipv4OfInterface(%s) returned unusable %q", iface, ip)
+	}
+}
+
+func TestLooksVirtual(t *testing.T) {
+	cases := map[string]bool{
+		"eth0":        false,
+		"en0":         false,
+		"ens5":        false,
+		"docker0":     true,
+		"br-abc123":   true,
+		"veth1234567": true,
+		"virbr0":      true,
+		"tailscale0":  true,
+		"tun0":        true,
+		"wg0":         true,
+		"vboxnet1":    true,
+	}
+	for name, want := range cases {
+		if got := looksVirtual(name); got != want {
+			t.Errorf("looksVirtual(%q) = %v, want %v", name, got, want)
+		}
 	}
 }
 

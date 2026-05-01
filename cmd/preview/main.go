@@ -11,6 +11,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"flag"
@@ -135,36 +136,114 @@ func detectIP() string {
 	return firstNonLoopbackIPv4()
 }
 
-// firstNonLoopbackIPv4 enumerates local interfaces and returns the first
-// non-loopback, non-link-local IPv4 address belonging to an "up" interface.
-// Avoids any external network probe so it works on LAN-only or
+// firstNonLoopbackIPv4 picks the local IPv4 address that the preview server
+// is most likely to be able to reach. It tries, in order:
+//
+//  1. The interface that owns the default route (Linux: /proc/net/route).
+//     This is what the kernel itself would pick to send outbound traffic
+//     and matches "the IP that's actually reachable from elsewhere on the
+//     network" for the typical case.
+//  2. Enumerate all "up" interfaces and prefer one whose name doesn't look
+//     like a virtual NIC (docker*, br-*, veth*, virbr*, vboxnet*, tun*,
+//     tap*, wg*, tailscale*). Falls back to any virtual NIC IP only if
+//     that's the only thing available.
+//
+// No external network probe is performed, so this works on LAN-only and
 // egress-restricted hosts.
 func firstNonLoopbackIPv4() string {
+	if iface := defaultRouteInterface(); iface != "" {
+		if ip := ipv4OfInterface(iface); ip != "" {
+			return ip
+		}
+	}
+	return preferredInterfaceIPv4()
+}
+
+// defaultRouteInterface parses /proc/net/route and returns the name of the
+// interface owning the default (0.0.0.0/0) route. Linux-only; returns ""
+// elsewhere or when no default route is configured.
+func defaultRouteInterface() string {
+	f, err := os.Open("/proc/net/route")
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	first := true
+	for scanner.Scan() {
+		if first {
+			first = false
+			continue
+		}
+		fields := strings.Fields(scanner.Text())
+		// fields: Iface Destination Gateway Flags RefCnt Use Metric Mask ...
+		if len(fields) >= 8 && fields[1] == "00000000" {
+			return fields[0]
+		}
+	}
+	return ""
+}
+
+func ipv4OfInterface(name string) string {
+	iface, err := net.InterfaceByName(name)
+	if err != nil || iface.Flags&net.FlagUp == 0 {
+		return ""
+	}
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return ""
+	}
+	for _, addr := range addrs {
+		ipnet, ok := addr.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		ip := ipnet.IP.To4()
+		if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+			continue
+		}
+		return ip.String()
+	}
+	return ""
+}
+
+var virtualIfacePrefixes = []string{
+	"docker", "br-", "virbr", "vboxnet", "veth",
+	"tun", "tap", "wg", "tailscale", "zt",
+}
+
+func looksVirtual(name string) bool {
+	for _, p := range virtualIfacePrefixes {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func preferredInterfaceIPv4() string {
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return ""
 	}
+	var virtual string
 	for _, iface := range ifaces {
 		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
 			continue
 		}
-		addrs, err := iface.Addrs()
-		if err != nil {
+		ip := ipv4OfInterface(iface.Name)
+		if ip == "" {
 			continue
 		}
-		for _, addr := range addrs {
-			ipnet, ok := addr.(*net.IPNet)
-			if !ok {
-				continue
+		if looksVirtual(iface.Name) {
+			if virtual == "" {
+				virtual = ip
 			}
-			ip := ipnet.IP.To4()
-			if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
-				continue
-			}
-			return ip.String()
+			continue
 		}
+		return ip
 	}
-	return ""
+	return virtual
 }
 
 func envInt(k string, dflt int) int {

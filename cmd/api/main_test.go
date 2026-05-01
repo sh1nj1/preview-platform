@@ -489,6 +489,34 @@ func TestTraefikObjectNamesUnambiguous(t *testing.T) {
 	}
 }
 
+// TestHandleGetDistinguishes404From500 verifies that a missing route
+// produces 404 while a non-ENOENT read failure produces 500. Previously
+// every error mapped to 404, which would make a temporarily unreadable
+// route look like it had been deleted.
+func TestHandleGetDistinguishes404From500(t *testing.T) {
+	s, dir := newTestServer(t)
+
+	t.Run("missing returns 404", func(t *testing.T) {
+		w := do(s, "GET", "/v1/previews/nope/none", "secret", nil)
+		if w.Code != 404 {
+			t.Fatalf("got %d, want 404", w.Code)
+		}
+	})
+
+	t.Run("read failure returns 500", func(t *testing.T) {
+		// Place a directory at the route file path. ReadFile then fails
+		// with EISDIR, which is not fs.ErrNotExist.
+		bad := filepath.Join(dir, "wt-readfail__y.yml")
+		if err := os.Mkdir(bad, 0755); err != nil {
+			t.Fatal(err)
+		}
+		w := do(s, "GET", "/v1/previews/readfail/y", "secret", nil)
+		if w.Code != 500 {
+			t.Fatalf("got %d, want 500 (body=%s)", w.Code, w.Body.String())
+		}
+	})
+}
+
 // TestListPropagatesReadError ensures the list path doesn't silently drop
 // a route whose YAML file can't be read — operators must see the failure
 // (HTTP 500) instead of an incomplete-but-200 response.

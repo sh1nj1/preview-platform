@@ -399,7 +399,15 @@ func (s *server) handleGet(w http.ResponseWriter, project, slug string) {
 		body, err = os.ReadFile(s.legacyRouteFile(project, slug))
 	}
 	if err != nil {
-		http.Error(w, "not found", 404)
+		// Distinguish "the route never existed" (404) from real I/O
+		// trouble (500). The previous catch-all 404 hid permission and
+		// filesystem errors, misleading clients into thinking a route
+		// had been deleted when it was just temporarily unreadable.
+		if errors.Is(err, fs.ErrNotExist) {
+			http.Error(w, "not found", 404)
+			return
+		}
+		http.Error(w, err.Error(), 500)
 		return
 	}
 	upstream := ""
