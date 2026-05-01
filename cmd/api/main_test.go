@@ -292,6 +292,27 @@ func TestLegacyFilenameCompat(t *testing.T) {
 		if len(items) != 1 || items[0].Slug != "oldslug" {
 			t.Fatalf("legacy not listed: %+v", items)
 		}
+		if !items[0].Legacy {
+			t.Errorf("expected Legacy=true, got %+v", items[0])
+		}
+	})
+
+	t.Run("list without filter also includes legacy (best-effort split)", func(t *testing.T) {
+		w := do(s, "GET", "/v1/previews", "secret", nil)
+		var items []linkResp
+		json.NewDecoder(w.Body).Decode(&items)
+		var found *linkResp
+		for i := range items {
+			if items[i].Project == "legacyproj" && items[i].Slug == "oldslug" {
+				found = &items[i]
+			}
+		}
+		if found == nil {
+			t.Fatalf("legacy not in unfiltered list: %+v", items)
+		}
+		if !found.Legacy {
+			t.Errorf("expected Legacy=true on unfiltered match")
+		}
 	})
 
 	t.Run("create cleans up legacy", func(t *testing.T) {
@@ -379,6 +400,25 @@ func TestMethodNotAllowed(t *testing.T) {
 	w := do(s, "PATCH", "/v1/previews", "secret", nil)
 	if w.Code != 405 {
 		t.Fatalf("want 405, got %d", w.Code)
+	}
+}
+
+// TestSkillFilesInSync guards against drift between the canonical
+// skills/preview/SKILL.md (what users browse) and cmd/api/skill/SKILL.md
+// (what the API embeds). The Makefile copies the former to the latter;
+// editing one but forgetting to run `make sync-embed` would otherwise
+// silently ship a stale skill via the install endpoint.
+func TestSkillFilesInSync(t *testing.T) {
+	embedded, err := os.ReadFile("skill/SKILL.md")
+	if err != nil {
+		t.Fatalf("read embedded: %v", err)
+	}
+	canonical, err := os.ReadFile(filepath.Join("..", "..", "skills", "preview", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("read canonical: %v", err)
+	}
+	if string(embedded) != string(canonical) {
+		t.Fatalf("cmd/api/skill/SKILL.md is out of sync with skills/preview/SKILL.md — run `make sync-embed`")
 	}
 }
 

@@ -152,6 +152,11 @@ type linkResp struct {
 	Project  string `json:"project"`
 	Slug     string `json:"slug"`
 	Upstream string `json:"upstream"`
+	// Legacy is true when this entry was discovered via the bash CLI's
+	// filename format (wt-<project>-<slug>.yml). Project/slug parsing is
+	// best-effort because hyphens make the split ambiguous; operators
+	// should use this flag to identify routes that need cleanup.
+	Legacy bool `json:"legacy,omitempty"`
 }
 
 type server struct {
@@ -260,8 +265,9 @@ func (s *server) handleDelete(w http.ResponseWriter, project, slug string) {
 }
 
 var (
-	routeFileRe = regexp.MustCompile(`^wt-([a-z0-9][a-z0-9-]*)__([a-z0-9][a-z0-9-]*)\.yml$`)
-	urlLineRe   = regexp.MustCompile(`url:\s*"([^"]+)"`)
+	routeFileRe       = regexp.MustCompile(`^wt-([a-z0-9][a-z0-9-]*)__([a-z0-9][a-z0-9-]*)\.yml$`)
+	legacyRouteFileRe = regexp.MustCompile(`^wt-([a-z0-9][a-z0-9-]*)\.yml$`)
+	urlLineRe         = regexp.MustCompile(`url:\s*"([^"]+)"`)
 )
 
 func (s *server) listAll(filterProject string) ([]linkResp, error) {
@@ -274,7 +280,7 @@ func (s *server) listAll(filterProject string) ([]linkResp, error) {
 	}
 	var out []linkResp
 	seen := map[string]bool{}
-	add := func(project, slug, name string) {
+	add := func(project, slug, name string, legacy bool) {
 		key := project + "/" + slug
 		if seen[key] {
 			return
@@ -293,6 +299,7 @@ func (s *server) listAll(filterProject string) ([]linkResp, error) {
 			Project:  project,
 			Slug:     slug,
 			Upstream: upstream,
+			Legacy:   legacy,
 		})
 	}
 
@@ -306,19 +313,36 @@ func (s *server) listAll(filterProject string) ([]linkResp, error) {
 			if filterProject != "" && project != filterProject {
 				continue
 			}
-			add(project, slug, e.Name())
+			add(project, slug, e.Name(), false)
 			continue
 		}
 		// Legacy format (wt-<project>-<slug>.yml). The split is ambiguous
-		// when project names contain hyphens, so we only honor it when the
-		// caller filtered by a specific project — then the prefix is exact.
-		if filterProject != "" {
-			prefix := "wt-" + filterProject + "-"
-			if strings.HasPrefix(e.Name(), prefix) && strings.HasSuffix(e.Name(), ".yml") {
-				slug := strings.TrimSuffix(strings.TrimPrefix(e.Name(), prefix), ".yml")
-				if validSlug(slug) {
-					add(filterProject, slug, e.Name())
+		// when project names contain hyphens. With a project filter we get
+		// an exact prefix; without one, we fall back to "first hyphen as
+		// separator" — wrong for hyphenated project names but better than
+		// silently hiding routes during an upgrade. Callers can identify
+		// best-effort entries via the Legacy flag.
+		if m := legacyRouteFileRe.FindStringSubmatch(e.Name()); m != nil {
+			body := m[1]
+			if filterProject != "" {
+				prefix := filterProject + "-"
+				if !strings.HasPrefix(body, prefix) {
+					continue
 				}
+				slug := strings.TrimPrefix(body, prefix)
+				if validSlug(slug) {
+					add(filterProject, slug, e.Name(), true)
+				}
+				continue
+			}
+			// Unfiltered: best-effort split on first hyphen.
+			idx := strings.Index(body, "-")
+			if idx <= 0 || idx == len(body)-1 {
+				continue
+			}
+			project, slug := body[:idx], body[idx+1:]
+			if validSlug(project) && validSlug(slug) {
+				add(project, slug, e.Name(), true)
 			}
 		}
 	}

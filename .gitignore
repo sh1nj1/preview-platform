@@ -7,7 +7,6 @@ dynamic/*.yml
 
 # Build outputs
 bin/
-cmd/api/skill/
 cmd/api/dist/preview-*
 
 # OS / editor
