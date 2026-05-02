@@ -89,7 +89,24 @@ EOF
 )"
 
 if aws iam get-policy --policy-arn "$POLICY_ARN" >/dev/null 2>&1; then
-  echo "==> Policy already exists, skipping creation: ${POLICY_ARN}"
+  echo "==> Policy exists, creating new version: ${POLICY_ARN}"
+  # AWS managed policies allow up to 5 versions; prune the oldest
+  # non-default one if we're at the limit.
+  VERSION_COUNT="$(aws iam list-policy-versions --policy-arn "$POLICY_ARN" \
+    --query 'length(Versions)' --output text)"
+  if [[ "$VERSION_COUNT" -ge 5 ]]; then
+    OLDEST_VERSION="$(aws iam list-policy-versions --policy-arn "$POLICY_ARN" \
+      --query 'Versions[?!IsDefaultVersion]|[-1].VersionId' --output text)"
+    echo "    pruning oldest version: ${OLDEST_VERSION}"
+    aws iam delete-policy-version \
+      --policy-arn "$POLICY_ARN" \
+      --version-id "$OLDEST_VERSION"
+  fi
+  aws iam create-policy-version \
+    --policy-arn "$POLICY_ARN" \
+    --policy-document "$POLICY_DOC" \
+    --set-as-default \
+    --output table
 else
   echo "==> Creating IAM policy: ${POLICY_NAME}"
   aws iam create-policy \
