@@ -67,7 +67,10 @@ POLICY_DOC="$(cat <<EOF
   "Statement": [
     {
       "Effect": "Allow",
-      "Action": "route53:ChangeResourceRecordSets",
+      "Action": [
+        "route53:ChangeResourceRecordSets",
+        "route53:ListResourceRecordSets"
+      ],
       "Resource": "${ROUTE53_RESOURCE}"
     },
     {
