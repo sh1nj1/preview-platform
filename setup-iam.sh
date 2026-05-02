@@ -41,6 +41,10 @@ for cmd in aws jq; do
 done
 
 # ── Build Route 53 resource ARN ───────────────────────────────────────────────
+# Accept zone IDs in either bare form (Z123...) or API-response form
+# (/hostedzone/Z123...) by stripping the optional prefix.
+ZONE_ID="${ZONE_ID#/hostedzone/}"
+
 if [[ -n "$ZONE_ID" ]]; then
   ROUTE53_RESOURCE="arn:aws:route53:::hostedzone/${ZONE_ID}"
 else
