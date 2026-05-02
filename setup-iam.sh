@@ -67,11 +67,13 @@ POLICY_DOC="$(cat <<EOF
   "Statement": [
     {
       "Effect": "Allow",
-      "Action": [
-        "route53:ChangeResourceRecordSets",
-        "route53:ListHostedZonesByName"
-      ],
+      "Action": "route53:ChangeResourceRecordSets",
       "Resource": "${ROUTE53_RESOURCE}"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "route53:ListHostedZonesByName",
+      "Resource": "*"
     },
     {
       "Effect": "Allow",
