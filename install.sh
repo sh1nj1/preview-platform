@@ -17,12 +17,9 @@ if ! command -v docker >/dev/null 2>&1; then
     echo "    Docker not found. Install Docker Desktop for Mac: https://docs.docker.com/desktop/mac/install/"
     exit 1
   fi
-  if [ "$(id -u)" -ne 0 ]; then
-    echo "    Docker not found. Re-running with sudo to install Docker."
-    exec sudo -E INSTALL_DIR="$INSTALL_DIR" "$0" "$@"
-  fi
-  curl -fsSL https://get.docker.com | sh
-  usermod -aG docker "${SUDO_USER:-$USER}" || true
+  echo "    Docker not found. Installing via sudo (only this step runs as root)."
+  curl -fsSL https://get.docker.com | sudo sh
+  sudo usermod -aG docker "$USER" || true
   echo "    (you may need to log out and back in for group membership)"
 fi
 
