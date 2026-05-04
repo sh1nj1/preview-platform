@@ -9,7 +9,14 @@
 
 set -euo pipefail
 
-INSTALL_DIR="${INSTALL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/preview-platform}"
+# Resolve the real invoking user even when called via sudo.
+REAL_USER="${SUDO_USER:-$USER}"
+REAL_HOME="$(eval echo "~$REAL_USER")"
+
+INSTALL_DIR="${INSTALL_DIR:-${XDG_DATA_HOME:-$REAL_HOME/.local/share}/preview-platform}"
+
+# Use sudo only when not already root.
+_sudo() { [ "$(id -u)" -eq 0 ] && "$@" || sudo "$@"; }
 
 echo "==> Installing Docker if missing"
 if ! command -v docker >/dev/null 2>&1; then
@@ -17,9 +24,9 @@ if ! command -v docker >/dev/null 2>&1; then
     echo "    Docker not found. Install Docker Desktop for Mac: https://docs.docker.com/desktop/mac/install/"
     exit 1
   fi
-  echo "    Docker not found. Installing via sudo (only this step runs as root)."
-  curl -fsSL https://get.docker.com | sudo sh
-  sudo usermod -aG docker "${SUDO_USER:-$USER}" || true
+  echo "    Docker not found. Installing (only this step runs as root)."
+  curl -fsSL https://get.docker.com | _sudo sh
+  _sudo usermod -aG docker "$REAL_USER" || true
   echo "    (you may need to log out and back in for group membership)"
 fi
 
