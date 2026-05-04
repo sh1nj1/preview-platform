@@ -16,7 +16,7 @@ REAL_HOME="$(eval echo "~$REAL_USER")"
 INSTALL_DIR="${INSTALL_DIR:-${XDG_DATA_HOME:-$REAL_HOME/.local/share}/preview-platform}"
 
 # Use sudo only when not already root.
-_sudo() { [ "$(id -u)" -eq 0 ] && "$@" || sudo "$@"; }
+_sudo() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi; }
 
 echo "==> Installing Docker if missing"
 if ! command -v docker >/dev/null 2>&1; then
