@@ -19,7 +19,7 @@ if ! command -v docker >/dev/null 2>&1; then
   fi
   echo "    Docker not found. Installing via sudo (only this step runs as root)."
   curl -fsSL https://get.docker.com | sudo sh
-  sudo usermod -aG docker "$USER" || true
+  sudo usermod -aG docker "${SUDO_USER:-$USER}" || true
   echo "    (you may need to log out and back in for group membership)"
 fi
 
