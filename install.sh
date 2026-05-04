@@ -19,7 +19,7 @@ if ! command -v docker >/dev/null 2>&1; then
   fi
   if [ "$(id -u)" -ne 0 ]; then
     echo "    Docker not found. Re-running with sudo to install Docker."
-    exec sudo -E "$0" "$@"
+    exec sudo -E INSTALL_DIR="$INSTALL_DIR" "$0" "$@"
   fi
   curl -fsSL https://get.docker.com | sh
   usermod -aG docker "${SUDO_USER:-$USER}" || true
