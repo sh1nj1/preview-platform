@@ -3,7 +3,9 @@ package main
 import (
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -149,5 +151,78 @@ func TestEnvInt(t *testing.T) {
 	}
 	if got := envInt("DOES_NOT_EXIST_XYZ", 99); got != 99 {
 		t.Errorf("missing: got %d, want 99", got)
+	}
+}
+
+func TestHostsAdd(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "hosts")
+
+	// Add to empty file.
+	if err := hostsAdd(f, "slug.proj.example.com", "127.0.0.1"); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(f)
+	if !strings.Contains(string(data), "127.0.0.1 slug.proj.example.com # preview") {
+		t.Fatalf("entry missing: %s", data)
+	}
+
+	// Idempotent: adding again must not duplicate.
+	if err := hostsAdd(f, "slug.proj.example.com", "127.0.0.1"); err != nil {
+		t.Fatal(err)
+	}
+	data, _ = os.ReadFile(f)
+	count := strings.Count(string(data), "slug.proj.example.com")
+	if count != 1 {
+		t.Fatalf("expected 1 entry, got %d:\n%s", count, data)
+	}
+}
+
+func TestHostsRemove(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "hosts")
+	initial := "127.0.0.1 other.example.com # preview\n127.0.0.1 target.example.com # preview\n"
+	os.WriteFile(f, []byte(initial), 0644)
+
+	if err := hostsRemove(f, "target.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(f)
+	if strings.Contains(string(data), "target.example.com") {
+		t.Fatalf("entry not removed: %s", data)
+	}
+	if !strings.Contains(string(data), "other.example.com") {
+		t.Fatalf("unrelated entry lost: %s", data)
+	}
+}
+
+func TestHostsRemoveIdempotent(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "hosts")
+	os.WriteFile(f, []byte("127.0.0.1 localhost\n"), 0644)
+
+	// Removing a hostname that isn't present must not error or corrupt the file.
+	if err := hostsRemove(f, "nothere.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(f)
+	if string(data) != "127.0.0.1 localhost\n" {
+		t.Fatalf("file modified unexpectedly: %s", data)
+	}
+}
+
+func TestHostsLineMatchesHost(t *testing.T) {
+	cases := []struct {
+		line, hostname string
+		want           bool
+	}{
+		{"127.0.0.1 foo.example.com # preview", "foo.example.com", true},
+		{"192.168.1.1 foo.example.com # preview", "foo.example.com", true},
+		{"127.0.0.1 other.example.com # preview", "foo.example.com", false},
+		{"127.0.0.1 foo.example.com", "foo.example.com", false},         // no marker
+		{"# 127.0.0.1 foo.example.com # preview", "foo.example.com", false}, // comment line
+		{"", "foo.example.com", false},
+	}
+	for _, tc := range cases {
+		if got := hostsLineMatchesHost(tc.line, tc.hostname); got != tc.want {
+			t.Errorf("hostsLineMatchesHost(%q, %q) = %v, want %v", tc.line, tc.hostname, got, tc.want)
+		}
 	}
 }

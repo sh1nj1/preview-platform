@@ -31,6 +31,59 @@ import (
 	"time"
 )
 
+const defaultHostsFile = "/etc/hosts"
+const hostsMarker = "# preview"
+
+// hostsAdd appends "<ip> <hostname> # preview" to the hosts file if not already present.
+func hostsAdd(hostsFile, hostname, ip string) error {
+	data, err := os.ReadFile(hostsFile)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	entry := ip + " " + hostname + " " + hostsMarker
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(line) == entry {
+			return nil
+		}
+	}
+	f, err := os.OpenFile(hostsFile, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = fmt.Fprintln(f, entry)
+	return err
+}
+
+// hostsRemove removes lines matching "<any-ip> <hostname> # preview" from the hosts file.
+func hostsRemove(hostsFile, hostname string) error {
+	data, err := os.ReadFile(hostsFile)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(string(data), "\n")
+	kept := lines[:0]
+	for _, line := range lines {
+		if !hostsLineMatchesHost(line, hostname) {
+			kept = append(kept, line)
+		}
+	}
+	if len(kept) == len(lines) {
+		return nil
+	}
+	return os.WriteFile(hostsFile, []byte(strings.Join(kept, "\n")), 0644)
+}
+
+// hostsLineMatchesHost reports whether line is a preview hosts entry for hostname.
+// Expected format: "<ip> <hostname> # preview"
+func hostsLineMatchesHost(line, hostname string) bool {
+	fields := strings.Fields(line)
+	return len(fields) >= 4 && fields[1] == hostname && fields[2] == "#" && fields[3] == "preview"
+}
+
 const usage = `preview — register dev servers with the preview platform.
 
 Commands:
@@ -344,6 +397,8 @@ func cmdLink(args []string) error {
 	upstreamFlag := fs.String("upstream", "", "upstream URL override (http://host:port)")
 	slugFlag := fs.String("slug", "", "slug override")
 	insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
+	writeHosts := fs.Bool("write-hosts", false, "add preview hostname to /etc/hosts (may require sudo)")
+	hostsIP := fs.String("hosts-ip", "127.0.0.1", "IP address written to /etc/hosts (with --write-hosts)")
 	fs.Parse(args)
 
 	c, err := loadConfig()
@@ -410,6 +465,15 @@ func cmdLink(args []string) error {
 	if localPort > 0 {
 		fmt.Fprintf(os.Stderr, "  env:      .preview.env (PORT=%d)\n\n  source .preview.env && <your dev server>\n", localPort)
 	}
+	if *writeHosts {
+		u, _ := url.Parse(lr.URL)
+		hostname := u.Hostname()
+		if err := hostsAdd(defaultHostsFile, hostname, *hostsIP); err != nil {
+			fmt.Fprintf(os.Stderr, "  warn: /etc/hosts: %v\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "  hosts:    %s %s\n", *hostsIP, hostname)
+		}
+	}
 	return nil
 }
 
@@ -417,6 +481,7 @@ func cmdUnlink(args []string) error {
 	fs := flag.NewFlagSet("unlink", flag.ExitOnError)
 	slugFlag := fs.String("slug", "", "slug override")
 	insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
+	writeHosts := fs.Bool("write-hosts", false, "remove preview hostname from /etc/hosts (may require sudo)")
 	fs.Parse(args)
 
 	c, err := loadConfig()
@@ -437,6 +502,20 @@ func cmdUnlink(args []string) error {
 			return err
 		}
 	}
+
+	// Resolve the preview hostname before deleting the route.
+	var previewHostname string
+	if *writeHosts {
+		if resp, err := apiCall(c, "GET", "/v1/previews/"+project+"/"+slug, nil); err == nil {
+			var it listItem
+			if decodeOrErr(resp, &it) == nil {
+				if u, err := url.Parse(it.URL); err == nil {
+					previewHostname = u.Hostname()
+				}
+			}
+		}
+	}
+
 	resp, err := apiCall(c, "DELETE", "/v1/previews/"+project+"/"+slug, nil)
 	if err != nil {
 		return err
@@ -445,6 +524,13 @@ func cmdUnlink(args []string) error {
 		return err
 	}
 	os.Remove(".preview.env")
+
+	if *writeHosts && previewHostname != "" {
+		if err := hostsRemove(defaultHostsFile, previewHostname); err != nil {
+			fmt.Fprintf(os.Stderr, "  warn: /etc/hosts: %v\n", err)
+		}
+	}
+
 	fmt.Fprintf(os.Stderr, "✓ unlinked %s\n", slug)
 	return nil
 }
