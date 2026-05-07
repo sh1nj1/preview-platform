@@ -57,7 +57,7 @@ Next steps:
        - PREVIEW_DOMAIN, ACME_EMAIL, AWS_*, DASHBOARD_AUTH
        - PREVIEW_API_TOKEN (run: openssl rand -hex 32)
   2. Confirm Route53 has wildcard A record (covers traefik.* and api.*):
-       *.<your-domain>  →  $(hostname -I | awk '{print $1}')
+       *.<your-domain>  →  $(hostname -I 2>/dev/null | awk '{print $1}' || ipconfig getifaddr en0 2>/dev/null || echo "<server-ip>")
   3. cd ${INSTALL_DIR} && docker compose up -d --build
   4. Watch cert issuance:  docker compose logs -f traefik | grep -i acme
   5. Visit  https://traefik.<your-domain>  (BasicAuth)
