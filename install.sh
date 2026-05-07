@@ -1,24 +1,32 @@
 #!/usr/bin/env bash
-# Bootstrap the preview platform on a fresh Ubuntu/Debian server.
+# Bootstrap the preview platform on a fresh server (Linux or macOS).
 #
 # Run from the cloned repo root:
-#   sudo ./install.sh
+#   ./install.sh
+#
+# Override the install location:
+#   INSTALL_DIR=/opt/preview-platform ./install.sh
 
 set -euo pipefail
 
-INSTALL_DIR="${INSTALL_DIR:-/srv/preview-platform}"
-
-if [ "$(id -u)" -ne 0 ]; then
-  echo "==> Re-running with sudo"
-  exec sudo -E "$0" "$@"
-fi
-
+# Resolve the real invoking user even when called via sudo.
 REAL_USER="${SUDO_USER:-$USER}"
+REAL_HOME="$(eval echo "~$REAL_USER")"
+
+INSTALL_DIR="${INSTALL_DIR:-${XDG_DATA_HOME:-$REAL_HOME/.local/share}/preview-platform}"
+
+# Use sudo only when not already root.
+_sudo() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi; }
 
 echo "==> Installing Docker if missing"
 if ! command -v docker >/dev/null 2>&1; then
-  curl -fsSL https://get.docker.com | sh
-  usermod -aG docker "$REAL_USER" || true
+  if [ "$(uname -s)" = "Darwin" ]; then
+    echo "    Docker not found. Install Docker Desktop for Mac: https://docs.docker.com/desktop/mac/install/"
+    exit 1
+  fi
+  echo "    Docker not found. Installing (only this step runs as root)."
+  curl -fsSL https://get.docker.com | _sudo sh
+  _sudo usermod -aG docker "$REAL_USER" || true
   echo "    (you may need to log out and back in for group membership)"
 fi
 
