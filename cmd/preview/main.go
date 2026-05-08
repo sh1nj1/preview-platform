@@ -78,7 +78,7 @@ func hostsRemove(hostsFile, hostname string) error {
 		return err
 	}
 	lines := strings.Split(string(data), "\n")
-	kept := lines[:0]
+	var kept []string
 	for _, line := range lines {
 		if !hostsLineMatchesHost(line, hostname) {
 			kept = append(kept, line)
@@ -539,6 +539,9 @@ func cmdUnlink(args []string) error {
 					previewHostname = u.Hostname()
 				}
 			}
+		}
+		if previewHostname == "" {
+			fmt.Fprintf(os.Stderr, "  warn: could not resolve preview URL; remove /etc/hosts entry manually\n")
 		}
 	}
 
