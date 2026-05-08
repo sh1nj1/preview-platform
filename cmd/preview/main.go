@@ -35,6 +35,7 @@ const defaultHostsFile = "/etc/hosts"
 const hostsMarker = "# preview"
 
 // hostsAdd appends "<ip> <hostname> # preview" to the hosts file if not already present.
+// If the file is not writable, it retries via "sudo tee -a".
 func hostsAdd(hostsFile, hostname, ip string) error {
 	data, err := os.ReadFile(hostsFile)
 	if err != nil && !os.IsNotExist(err) {
@@ -48,6 +49,9 @@ func hostsAdd(hostsFile, hostname, ip string) error {
 	}
 	f, err := os.OpenFile(hostsFile, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
+		if os.IsPermission(err) {
+			return hostsAddSudo(hostsFile, entry)
+		}
 		return err
 	}
 	defer f.Close()
@@ -55,7 +59,16 @@ func hostsAdd(hostsFile, hostname, ip string) error {
 	return err
 }
 
+func hostsAddSudo(hostsFile, entry string) error {
+	cmd := exec.Command("sudo", "tee", "-a", hostsFile)
+	cmd.Stdin = strings.NewReader(entry + "\n")
+	cmd.Stdout = io.Discard
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
 // hostsRemove removes lines matching "<any-ip> <hostname> # preview" from the hosts file.
+// If the file is not writable, it retries via "sudo tee".
 func hostsRemove(hostsFile, hostname string) error {
 	data, err := os.ReadFile(hostsFile)
 	if os.IsNotExist(err) {
@@ -74,7 +87,20 @@ func hostsRemove(hostsFile, hostname string) error {
 	if len(kept) == len(lines) {
 		return nil
 	}
-	return os.WriteFile(hostsFile, []byte(strings.Join(kept, "\n")), 0644)
+	content := []byte(strings.Join(kept, "\n"))
+	err = os.WriteFile(hostsFile, content, 0644)
+	if err != nil && os.IsPermission(err) {
+		return hostsWriteSudo(hostsFile, content)
+	}
+	return err
+}
+
+func hostsWriteSudo(hostsFile string, content []byte) error {
+	cmd := exec.Command("sudo", "tee", hostsFile)
+	cmd.Stdin = bytes.NewReader(content)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 // hostsLineMatchesHost reports whether line is a preview hosts entry for hostname.
