@@ -3,7 +3,7 @@
 
 services:
   socket-proxy:
-    image: tecnativa/docker-socket-proxy:0.9
+    image: tecnativa/docker-socket-proxy:v0.4.2
     container_name: preview-socket-proxy
     restart: unless-stopped
     volumes:
