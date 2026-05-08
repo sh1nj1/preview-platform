@@ -2,10 +2,48 @@
 # Edit .env first, then: docker compose up -d
 
 services:
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.9
+    container_name: preview-socket-proxy
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      CONTAINERS: 1
+      NETWORKS: 1
+      SERVICES: 1
+      TASKS: 1
+      INFO: 1
+      EVENTS: 1
+      PING: 1
+    networks:
+      - socket-proxy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:2375/_ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  version-proxy:
+    image: nginx:1.27-alpine
+    container_name: preview-version-proxy
+    restart: unless-stopped
+    depends_on:
+      socket-proxy:
+        condition: service_healthy
+    volumes:
+      - ./nginx-version-rewrite.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - socket-proxy
+
   traefik:
     image: traefik:v3.2
     container_name: preview-traefik
     restart: unless-stopped
+    depends_on:
+      version-proxy:
+        condition: service_started
     ports:
       - "80:80"
       - "443:443"
@@ -15,16 +53,17 @@ services:
       - AWS_REGION=${AWS_REGION:-ap-northeast-2}
       - AWS_HOSTED_ZONE_ID=${AWS_HOSTED_ZONE_ID}
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./letsencrypt:/letsencrypt
       - ./dynamic:/dynamic:ro
     networks:
       - preview
+      - socket-proxy
     command:
       # --- Providers ---
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
       - --providers.docker.network=preview
+      - --providers.docker.endpoint=tcp://version-proxy:2376
       - --providers.file.directory=/dynamic
       - --providers.file.watch=true
 
@@ -54,13 +93,22 @@ services:
 
     labels:
       - traefik.enable=true
-      # Dashboard route (BasicAuth-protected)
-      - traefik.http.routers.dashboard.rule=Host(`traefik.${PREVIEW_DOMAIN}`)
+      # Router 1: serve dashboard + API paths (api@internal requires explicit PathPrefix in v3)
+      - "traefik.http.routers.dashboard.rule=Host(`traefik.${PREVIEW_DOMAIN}`) && (PathPrefix(`/dashboard`) || PathPrefix(`/api`))"
       - traefik.http.routers.dashboard.service=api@internal
       - traefik.http.routers.dashboard.tls=true
       - traefik.http.routers.dashboard.entrypoints=websecure
       - traefik.http.routers.dashboard.middlewares=dashboard-auth
-      - traefik.http.middlewares.dashboard-auth.basicauth.users=${DASHBOARD_AUTH}
+      - "traefik.http.middlewares.dashboard-auth.basicauth.users=${DASHBOARD_AUTH}"
+      # Router 2: redirect root → /dashboard/
+      - "traefik.http.routers.dashboard-root.rule=Host(`traefik.${PREVIEW_DOMAIN}`) && Path(`/`)"
+      - traefik.http.routers.dashboard-root.service=api@internal
+      - traefik.http.routers.dashboard-root.tls=true
+      - traefik.http.routers.dashboard-root.entrypoints=websecure
+      - traefik.http.routers.dashboard-root.middlewares=dashboard-root-redirect
+      - "traefik.http.middlewares.dashboard-root-redirect.redirectregex.regex=^https?://[^/]+/?$$"
+      - "traefik.http.middlewares.dashboard-root-redirect.redirectregex.replacement=https://traefik.${PREVIEW_DOMAIN}/dashboard/"
+      - traefik.http.middlewares.dashboard-root-redirect.redirectregex.permanent=false
 
   preview-api:
     build:
@@ -90,3 +138,5 @@ services:
 networks:
   preview:
     name: preview
+  socket-proxy:
+    internal: true
