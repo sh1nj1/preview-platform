@@ -8,7 +8,7 @@ dynamic/*.yml
 # Build outputs
 bin/
 cmd/api/dist/preview-*
-preview
+/preview
 
 # OS / editor
 .DS_Store
