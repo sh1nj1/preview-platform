@@ -13,6 +13,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -33,19 +34,20 @@ import (
 const usage = `preview — register dev servers with the preview platform.
 
 Commands:
-  preview link    [--port N] [--upstream URL] [--slug NAME]
-  preview unlink  [--slug NAME]
-  preview list
-  preview url     [--slug NAME]
+  preview link    [--port N] [--upstream URL] [--slug NAME] [--insecure]
+  preview unlink  [--slug NAME] [--insecure]
+  preview list    [--insecure]
+  preview url     [--slug NAME] [--insecure]
 
-Config file: ~/.config/preview/config (endpoint=, token=)
-Env override: PREVIEW_API, PREVIEW_API_TOKEN, PREVIEW_HOST_IP,
-              PREVIEW_PORT_START (3001), PREVIEW_PORT_END (3099)
+Config file: ~/.config/preview/config (endpoint=, token=, insecure=true)
+Env override: PREVIEW_API, PREVIEW_API_TOKEN, PREVIEW_INSECURE,
+              PREVIEW_HOST_IP, PREVIEW_PORT_START (3001), PREVIEW_PORT_END (3099)
 `
 
 type config struct {
 	Endpoint string
 	Token    string
+	Insecure bool
 }
 
 func loadConfig() (*config, error) {
@@ -68,6 +70,8 @@ func loadConfig() (*config, error) {
 					c.Endpoint = v
 				case "token":
 					c.Token = v
+				case "insecure":
+					c.Insecure = v == "true" || v == "1" || v == "yes"
 				}
 			}
 		}
@@ -77,6 +81,9 @@ func loadConfig() (*config, error) {
 	}
 	if v := os.Getenv("PREVIEW_API_TOKEN"); v != "" {
 		c.Token = v
+	}
+	if v := os.Getenv("PREVIEW_INSECURE"); v == "1" || v == "true" {
+		c.Insecure = true
 	}
 	if c.Endpoint == "" {
 		return nil, fmt.Errorf("no API endpoint configured (run install or set PREVIEW_API)")
@@ -309,7 +316,14 @@ func apiCall(c *config, method, path string, body any) (*http.Response, error) {
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	return (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	client := &http.Client{Timeout: 30 * time.Second}
+	if c.Insecure {
+		fmt.Fprintln(os.Stderr, "warning: TLS certificate verification disabled (--insecure)")
+		client.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
+		}
+	}
+	return client.Do(req)
 }
 
 func decodeOrErr(resp *http.Response, out any) error {
@@ -329,11 +343,15 @@ func cmdLink(args []string) error {
 	port := fs.Int("port", 0, "port (0 = auto)")
 	upstreamFlag := fs.String("upstream", "", "upstream URL override (http://host:port)")
 	slugFlag := fs.String("slug", "", "slug override")
+	insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
 	fs.Parse(args)
 
 	c, err := loadConfig()
 	if err != nil {
 		return err
+	}
+	if *insecure {
+		c.Insecure = true
 	}
 	project, err := currentProject()
 	if err != nil {
@@ -398,11 +416,15 @@ func cmdLink(args []string) error {
 func cmdUnlink(args []string) error {
 	fs := flag.NewFlagSet("unlink", flag.ExitOnError)
 	slugFlag := fs.String("slug", "", "slug override")
+	insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
 	fs.Parse(args)
 
 	c, err := loadConfig()
 	if err != nil {
 		return err
+	}
+	if *insecure {
+		c.Insecure = true
 	}
 	project, err := currentProject()
 	if err != nil {
@@ -430,11 +452,15 @@ func cmdUnlink(args []string) error {
 func cmdList(args []string) error {
 	fs := flag.NewFlagSet("list", flag.ExitOnError)
 	all := fs.Bool("all", false, "list all projects (default: current project only)")
+	insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
 	fs.Parse(args)
 
 	c, err := loadConfig()
 	if err != nil {
 		return err
+	}
+	if *insecure {
+		c.Insecure = true
 	}
 	path := "/v1/previews"
 	if !*all {
@@ -465,10 +491,14 @@ func cmdList(args []string) error {
 func cmdURL(args []string) error {
 	fs := flag.NewFlagSet("url", flag.ExitOnError)
 	slugFlag := fs.String("slug", "", "slug override")
+	insecure := fs.Bool("insecure", false, "skip TLS certificate verification")
 	fs.Parse(args)
 	c, err := loadConfig()
 	if err != nil {
 		return err
+	}
+	if *insecure {
+		c.Insecure = true
 	}
 	project, err := currentProject()
 	if err != nil {
