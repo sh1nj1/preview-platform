@@ -6,22 +6,28 @@
 # Usage:
 #   curl -fsSL -H "Authorization: Bearer <TOKEN>" https://api.<domain>/install.sh | bash
 #   curl -fsSL -H "Authorization: Bearer <TOKEN>" https://api.<domain>/install.sh | bash -s -- --with-skill
+#   curl -fsSLk -H "Authorization: Bearer <TOKEN>" https://api.<domain>/install.sh | bash -s -- --insecure
 
 set -euo pipefail
 
 ENDPOINT="{{.Endpoint}}"
 TOKEN="{{.Token}}"
 WITH_SKILL=0
+INSECURE=0
 INSTALL_DIR="${PREVIEW_INSTALL_DIR:-$HOME/.local/bin}"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/preview"
 
 for arg in "$@"; do
   case "$arg" in
     --with-skill) WITH_SKILL=1 ;;
+    --insecure)   INSECURE=1 ;;
     --prefix=*)   INSTALL_DIR="${arg#--prefix=}" ;;
     *) echo "unknown flag: $arg" >&2; exit 2 ;;
   esac
 done
+
+CURL_OPTS=(-f -s -S -L)
+[ "$INSECURE" = 1 ] && CURL_OPTS+=(-k)
 
 uname_os() {
   local s
@@ -50,22 +56,23 @@ echo "==> Downloading preview CLI for ${OS}/${ARCH}"
 mkdir -p "$INSTALL_DIR" "$CONFIG_DIR"
 TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT
-curl -fsSL -H "Authorization: Bearer ${TOKEN}" \
+curl "${CURL_OPTS[@]}" -H "Authorization: Bearer ${TOKEN}" \
   "${ENDPOINT}/bin/preview/${OS}/${ARCH}" -o "$TMP"
 install -m 0755 "$TMP" "${INSTALL_DIR}/preview"
 
 echo "==> Writing ${CONFIG_DIR}/config"
 umask 077
-cat > "${CONFIG_DIR}/config" <<EOF
-endpoint=${ENDPOINT}
-token=${TOKEN}
-EOF
+{
+  echo "endpoint=${ENDPOINT}"
+  echo "token=${TOKEN}"
+  [ "$INSECURE" = 1 ] && echo "insecure=true"
+} > "${CONFIG_DIR}/config"
 
 if [ "$WITH_SKILL" = 1 ]; then
   SKILL_DIR="${HOME}/.claude/skills/preview"
   echo "==> Installing Claude Code skill into ${SKILL_DIR}"
   mkdir -p "$SKILL_DIR"
-  curl -fsSL -H "Authorization: Bearer ${TOKEN}" \
+  curl "${CURL_OPTS[@]}" -H "Authorization: Bearer ${TOKEN}" \
     "${ENDPOINT}/skills/preview" -o "${SKILL_DIR}/SKILL.md"
 fi
 
